@@ -27,12 +27,22 @@ void Sequencer::error(std::string_view errorString)
 
 void Sequencer::print(char32_t codepoint)
 {
+    if (vtParserLog)
+    {
+        if (codepoint < 0x80 && std::isprint(static_cast<char>(codepoint)))
+            vtParserLog()("Print: '{}'", static_cast<char>(codepoint));
+        else
+            vtParserLog()("Print: U+{:X}", (unsigned) codepoint);
+    }
     _terminal.incrementInstructionCounter();
     _terminal.sequenceHandler().writeText(codepoint);
 }
 
 size_t Sequencer::print(std::string_view chars, size_t cellCount)
 {
+    if (vtParserLog)
+        vtParserLog()("Print: ({}) '{}'", cellCount, crispy::escape(chars));
+
     assert(!chars.empty());
 
     _terminal.incrementInstructionCounter(chars.size());
@@ -44,6 +54,9 @@ size_t Sequencer::print(std::string_view chars, size_t cellCount)
 
 void Sequencer::printEnd() noexcept
 {
+    if (vtParserLog)
+        vtParserLog()("PrintEnd");
+
     _terminal.sequenceHandler().writeTextEnd();
 }
 
