@@ -614,7 +614,14 @@ CRISPY_REQUIRES(CellConcept<Cell>)
 inline bool Screen<Cell>::isContiguousToCurrentLine(std::string_view continuationChars) const noexcept
 {
     auto const& line = currentLine();
+#if !defined(_WIN32)
     return line.isTrivialBuffer() && line.trivialBuffer().text.view().end() == continuationChars.begin();
+#else
+    auto const end = line.trivialBuffer().text.data() + line.trivialBuffer().text.size();
+    auto const next = continuationChars.data();
+    return line.isTrivialBuffer() && end == next;
+    // TODO: && line.trivialBuffer().text.view().end() == continuationChars.begin();
+#endif
 }
 
 } // namespace vtbackend
