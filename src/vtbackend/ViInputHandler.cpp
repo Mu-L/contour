@@ -344,7 +344,7 @@ Handled ViInputHandler::sendKeyPressEvent(Key key, Modifiers modifiers)
         case ViMode::Insert:
             return Handled{false};
         case ViMode::Normal:
-            break;
+            return Handled{true};
         case ViMode::Visual:
         case ViMode::VisualLine:
         case ViMode::VisualBlock:

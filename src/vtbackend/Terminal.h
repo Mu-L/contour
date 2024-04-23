@@ -978,7 +978,8 @@ class Terminal
     bool allowPassMouseEventToApp(Modifiers currentlyPressedModifier) const noexcept
     {
         return _inputGenerator.mouseProtocol().has_value() && allowInput()
-               && !allowBypassAppMouseGrabViaModifier(currentlyPressedModifier);
+               && !allowBypassAppMouseGrabViaModifier(currentlyPressedModifier)
+               && _inputHandler.mode() == ViMode::Insert;
     }
 
     template <typename BlinkerState>
