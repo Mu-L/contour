@@ -73,6 +73,8 @@ option(CONTOUR_SANITIZE "Builds with Address sanitizer enabled [default: OFF]" "
 option(CONTOUR_STACKTRACE_ADDR2LINE "Uses addr2line to pretty-print SEGV stacktrace." ${ADDR2LINE_DEFAULT})
 option(CONTOUR_BUILD_WITH_MIMALLOC "Builds with mimalloc [default: OFF]" OFF)
 option(CONTOUR_INSTALL_TOOLS "Installs tools, if built [default: OFF]" OFF)
+option(CONTOUR_USE_CPM "Use CPM to fetch dependencies [default: ON]" ON)
+
 
 if(NOT WIN32 AND NOT CONTOUR_SANITIZE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CONTOUR_SANITIZE "OFF" CACHE STRING "Choose the sanitizer mode." FORCE)
@@ -101,6 +103,18 @@ if(CONTOUR_TESTING)
     enable_testing()
 endif()
 # ----------------------------------------------------------------------------
+
+if(CONTOUR_USE_CPM)
+    # download CPM.cmake
+    file(
+        DOWNLOAD
+        https://github.com/cpm-cmake/CPM.cmake/releases/download/v0.38.3/CPM.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake
+        EXPECTED_HASH SHA256=cc155ce02e7945e7b8967ddfaff0b050e958a723ef7aad3766d368940cb15494
+    )
+    include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
+endif()
+
 
 include(ContourThirdParties)
 add_subdirectory(src)

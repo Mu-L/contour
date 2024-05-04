@@ -62,28 +62,27 @@ int baseBenchmark(Writer&& writer, BenchOptions options, string_view title)
 
     cout << titleText << '\n' << string(titleText.size(), '=') << '\n';
 
-    auto tbp = contour::termbench::Benchmark { std::forward<Writer>(writer),
-                                               options.testSizeMB,
-                                               80,
-                                               24,
-                                               [&](contour::termbench::Test const& test) {
-                                                   cout << fmt::format("Running test {} ...\n", test.name);
-                                               } };
+    auto tbp = termbench::Benchmark { std::forward<Writer>(writer),
+                                      options.testSizeMB,
+                                      termbench::TerminalSize { 80, 24 },
+                                      [&](termbench::Test const& test) {
+                                          cout << fmt::format("Running test {} ...\n", test.name);
+                                      } };
 
     if (options.manyLines)
-        tbp.add(contour::termbench::tests::many_lines());
+        tbp.add(termbench::tests::many_lines());
 
     if (options.longLines)
-        tbp.add(contour::termbench::tests::long_lines());
+        tbp.add(termbench::tests::long_lines());
 
     if (options.sgr)
     {
-        tbp.add(contour::termbench::tests::sgr_fg_lines());
-        tbp.add(contour::termbench::tests::sgr_fgbg_lines());
+        tbp.add(termbench::tests::sgr_fg_lines());
+        tbp.add(termbench::tests::sgr_fgbg_lines());
     }
 
     if (options.binary)
-        tbp.add(contour::termbench::tests::binary());
+        tbp.add(termbench::tests::binary());
 
     tbp.runAll();
 
