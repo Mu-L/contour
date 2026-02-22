@@ -48,6 +48,32 @@ constexpr bool hasOnlyLockModifiers(Modifiers modifiers) noexcept
     return modifiers.without(LockModifiers).none();
 }
 
+/// Maps a character to its Ctrl-modified equivalent, following Kitty's ctrled_key algorithm.
+/// @param ch The character to map (e.g., 'a' for Ctrl+A).
+/// @returns The Ctrl-mapped byte, or std::nullopt if no legacy Ctrl mapping exists.
+constexpr std::optional<char> ctrlMappedKey(char32_t ch) noexcept
+{
+    // clang-format off
+    if (ch >= 'a' && ch <= 'z') return static_cast<char>(ch - 'a' + 1);
+    if (ch >= 'A' && ch <= 'Z') return static_cast<char>(ch - 'A' + 1);
+    switch (ch)
+    {
+        case '@': case ' ': case '2':                   return '\x00';
+        case '3': case '[':                             return '\x1B';
+        case '4': case '\\':                            return '\x1C';
+        case '5': case ']':                             return '\x1D';
+        case '6': case '~': case '^':                   return '\x1E';
+        case '7': case '/': case '?': case '_':         return '\x1F';
+        case '8':                                       return '\x7F';
+        case '0':                                       return '0';
+        case '1':                                       return '1';
+        case '9':                                       return '9';
+        case '\x09':                                    return '\x09'; // Tab
+        default:                                        return std::nullopt;
+    }
+    // clang-format on
+}
+
 // {{{ StandardKeyboardInputGenerator
 bool StandardKeyboardInputGenerator::generateChar(char32_t characterEvent,
                                                   uint32_t physicalKey,
@@ -62,11 +88,6 @@ bool StandardKeyboardInputGenerator::generateChar(char32_t characterEvent,
     // Strip lock modifiers (NumLock, CapsLock) as they are irrelevant for legacy character generation.
     modifiers = modifiers.without(LockModifiers);
 
-    // See section "Alt and Meta Keys" in ctlseqs.txt from xterm.
-    if (modifiers == Modifier::Alt)
-        // NB: There are other modes in xterm to send Alt+Key options or even send ESC on Meta key instead.
-        append("\033");
-
     // Well accepted hack to distinguish between Backspace and Ctrl+Backspace.
     // DECBKM (Backarrow Key Mode) swaps the default byte:
     //   DECBKM reset (default): Backspace → DEL (0x7F), Ctrl+Backspace → BS (0x08)
@@ -79,79 +100,60 @@ bool StandardKeyboardInputGenerator::generateChar(char32_t characterEvent,
         return true;
     }
 
-    // Backtab handling, 0x09 is Tab
-    if (modifiers == Modifier::Shift && characterEvent == 0x09)
+    // Backtab handling: any modifier combination that includes Shift + Tab.
+    // Kitty checks (mods & SHIFT) rather than exact equality, allowing Alt+Shift+Tab etc.
+    if (modifiers.contains(Modifier::Shift) && characterEvent == 0x09)
     {
-        append("\033[Z"); // introduced by linux_console in 1995, adopted by xterm in 2002
+        auto const hasAlt = modifiers.contains(Modifier::Alt);
+        append(hasAlt ? "\x1b\x1b[Z" : "\x1b[Z");
         return true;
     }
 
-    // raw C0 code
+    // Raw C0 code (Ctrl only, character already a control code).
     if (modifiers == Modifier::Control && characterEvent < 32)
     {
         append(static_cast<char>(characterEvent));
         return true;
     }
 
-    // See: DEC STD-070 in section 6.16 (Control Codes and Keystrokes), page 6-170
-    //
-    // https://vt100.net/mirror/antonio/std070_c_video_systems_reference_manual.pdf
-    if (modifiers.without(Modifier::Shift) == Modifier::Control)
+    // Strip Shift from effective modifiers for legacy encoding dispatch.
+    // The platform already provides the shifted character (e.g., 'A' for Shift+'a').
+    // Exception: Ctrl+Shift+letter is unrepresentable in legacy encoding,
+    // so we keep Shift to prevent the Ctrl mapping from matching (Issue 4).
+    auto effectiveMods = modifiers;
+    auto const isLetter =
+        (characterEvent >= 'A' && characterEvent <= 'Z') || (characterEvent >= 'a' && characterEvent <= 'z');
+    if (!(effectiveMods.contains(Modifier::Control) && isLetter))
+        effectiveMods = effectiveMods.without(Modifier::Shift);
+
+    // Ctrl mapping via ctrlMappedKey (with optional Alt prefix).
+    // Matches Kitty's encode_printable_ascii_key_legacy dispatch on remaining mods after Shift strip.
+    if (effectiveMods == Modifier::Control
+        || effectiveMods == (Modifiers { Modifier::Control } | Modifier::Alt))
     {
-        // clang-format off
-        switch (characterEvent)
+        auto const mapped = ctrlMappedKey(characterEvent);
+        if (mapped.has_value())
         {
-            case ' ':
-            case '2':
-                append('\x00');
-                return true;
-            case 'A': case 'B': case 'C': case 'D': case 'E': case 'F':
-            case 'G': case 'H': case 'I': case 'J': case 'K': case 'L':
-            case 'M': case 'N': case 'O': case 'P': case 'Q': case 'R':
-            case 'S': case 'T': case 'U': case 'V': case 'W': case 'X':
-            case 'Y': case 'Z':
-                append(static_cast<char>(characterEvent - 'A' + 1));
-                return true;
-            case '3':
-            case '[':
-                append('\x1B');
-                return true;
-            case '4':
-            case '\\':
-                append('\x1C');
-                return true;
-            case '5':
-            case ']':
-                append('\x1D');
-                return true;
-            case '6':
-            case '~':
-            case '^':
-                append('\x1E');
-                return true;
-            case '7':
-            case '?':
-            case '_':
-                append('\x1F');
-                return true;
-            case '8':
-                append('\x7F');
-                return true;
-            case '\x09': // TAB
-                append('\x09');
-                return true;
-            default:
-            break;
+            if (effectiveMods.contains(Modifier::Alt))
+                append('\x1b');
+            append(*mapped);
+            return true;
         }
-        // clang-format on
     }
 
-    if (modifiers.without(Modifier::Alt).none() || modifiers == Modifier::Shift)
+    // No effective modifiers or Alt-only: send the character (with optional ESC prefix for Alt).
+    if (effectiveMods.none() || effectiveMods == Modifier::Alt)
     {
-        append(unicode::convert_to<char>(characterEvent));
+        if (effectiveMods.contains(Modifier::Alt))
+            append('\x1b');
+        if (characterEvent < 0x7F)
+            append(static_cast<char>(characterEvent));
+        else
+            append(unicode::convert_to<char>(characterEvent));
         return true;
     }
 
+    // Fallback: send raw character for unhandled modifier combinations.
     if (characterEvent < 0x7F)
         append(static_cast<char>(characterEvent));
     else
@@ -230,9 +232,29 @@ bool StandardKeyboardInputGenerator::generateKey(Key key, Modifiers modifiers, K
         case Key::F33: append(select(modifiers, { .std = CSI "47~", .mods = CSI "47;{}~" })); break;
         case Key::F34: append(select(modifiers, { .std = CSI "48~", .mods = CSI "48;{}~" })); break;
         case Key::F35: append(select(modifiers, { .std = CSI "49~", .mods = CSI "49;{}~" })); break;
-        case Key::Escape: append("\033"); break;
+        case Key::Escape:
+        {
+            // Alt+Escape sends ESC ESC (Kitty: prefix = mods & ALT ? "\x1b" : "").
+            auto const hasAlt = modifiers.contains(Modifier::Alt);
+            append(hasAlt ? "\033\033" : "\033");
+            break;
+        }
         case Key::Enter: append(select(modifiers, { .std = "\r" })); break;
-        case Key::Tab: generateChar('\t', 0, modifiers, eventType); break;
+        case Key::Tab:
+        {
+            // Explicit Tab/Backtab handling with Alt prefix support.
+            if (modifiers.contains(Modifier::Shift))
+            {
+                auto const hasAlt = modifiers.contains(Modifier::Alt);
+                append(hasAlt ? "\x1b\x1b[Z" : "\x1b[Z");
+            }
+            else
+            {
+                auto const hasAlt = modifiers.contains(Modifier::Alt);
+                append(hasAlt ? "\x1b\t" : "\t");
+            }
+            break;
+        }
         case Key::Backspace:
         {
             // DECBKM swaps the default byte sent by Backspace (see generateChar for details).
@@ -334,8 +356,9 @@ bool ExtendedKeyboardInputGenerator::generateChar(char32_t characterEvent,
 
     // Printable chars with only Shift modifier are unambiguous: stay in legacy mode.
     // CSI u is only needed when mods other than Shift are present (or reportAllKeys is set).
-    if (!needsAction && !reportAllKeys
-        && (modifiers.without(LockModifiers).without(Modifier::Shift).none() || !disambiguate))
+    auto const hasOnlyShiftOrLocks = modifiers.without(LockModifiers).without(Modifier::Shift).none();
+    auto const canUseLegacyEncoding = hasOnlyShiftOrLocks || !disambiguate;
+    if (!needsAction && !reportAllKeys && canUseLegacyEncoding)
         return StandardKeyboardInputGenerator::generateChar(
             characterEvent, physicalKey, modifiers, eventType);
 

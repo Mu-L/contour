@@ -645,3 +645,89 @@ TEST_CASE("ExtendedKeyboardInputGenerator.EventType_encoding", "[terminal,input]
 }
 
 // }}}
+
+// {{{ Legacy multi-modifier tests (Kitty keyboard protocol cross-check)
+
+TEST_CASE("InputGenerator.Legacy.Shift_Alt_letter", "[terminal,input]")
+{
+    auto input = InputGenerator {};
+    // Shift+Alt+'a' → platform sends 'A' with Shift+Alt → should send ESC + 'A'
+    input.generate(
+        static_cast<char32_t>('A'), Modifiers { Modifier::Shift } | Modifier::Alt, KeyboardEventType::Press);
+    REQUIRE(escape(input.peek())
+            == escape("\x1b"
+                      "A"sv));
+}
+
+TEST_CASE("InputGenerator.Legacy.Ctrl_Alt_letter", "[terminal,input]")
+{
+    auto input = InputGenerator {};
+    // Ctrl+Alt+'a' → platform sends 'A' with Ctrl+Alt → should send ESC + C0
+    input.generate(static_cast<char32_t>('A'),
+                   Modifiers { Modifier::Control } | Modifier::Alt,
+                   KeyboardEventType::Press);
+    auto const expected = string("\x1b") + string(1, '\x01');
+    REQUIRE(escape(input.peek()) == escape(expected));
+}
+
+TEST_CASE("InputGenerator.Legacy.Alt_Shift_Tab", "[terminal,input]")
+{
+    auto input = InputGenerator {};
+    // Alt+Shift+Tab → should send ESC + backtab
+    input.generate(
+        static_cast<char32_t>(0x09), Modifiers { Modifier::Alt } | Modifier::Shift, KeyboardEventType::Press);
+    REQUIRE(escape(input.peek()) == escape("\x1b\x1b[Z"sv));
+}
+
+TEST_CASE("InputGenerator.Legacy.Ctrl_Shift_Tab", "[terminal,input]")
+{
+    auto input = InputGenerator {};
+    // Ctrl+Shift+Tab → backtab (Ctrl ignored for backtab)
+    input.generate(static_cast<char32_t>(0x09),
+                   Modifiers { Modifier::Control } | Modifier::Shift,
+                   KeyboardEventType::Press);
+    REQUIRE(escape(input.peek()) == escape("\x1b[Z"sv));
+}
+
+TEST_CASE("InputGenerator.Legacy.Ctrl_Alt_Tab", "[terminal,input]")
+{
+    auto input = InputGenerator {};
+    // Ctrl+Alt+Tab → ESC + Tab
+    input.generate(Key::Tab, Modifiers { Modifier::Control } | Modifier::Alt, KeyboardEventType::Press);
+    REQUIRE(escape(input.peek()) == escape("\x1b\t"sv));
+}
+
+TEST_CASE("InputGenerator.Legacy.Alt_Escape", "[terminal,input]")
+{
+    auto input = InputGenerator {};
+    // Alt+Escape → ESC ESC
+    input.generate(Key::Escape, Modifier::Alt, KeyboardEventType::Press);
+    REQUIRE(escape(input.peek()) == escape("\x1b\x1b"sv));
+}
+
+TEST_CASE("ExtendedKeyboardInputGenerator.CSIu.Ctrl_Shift_letter", "[terminal,input]")
+{
+    auto input = ExtendedKeyboardInputGenerator {};
+    input.enter(KeyboardEventFlag::DisambiguateEscapeCodes);
+    // Ctrl+Shift+'i' is unrepresentable in legacy → CSI u fallback: ESC[105;6u
+    input.generateChar('I', 'i', Modifiers { Modifier::Control } | Modifier::Shift, KeyboardEventType::Press);
+    REQUIRE(escape(input.take()) == escape("\x1b[105;6u"sv));
+}
+
+TEST_CASE("InputGenerator.Legacy.Ctrl_slash", "[terminal,input]")
+{
+    auto input = InputGenerator {};
+    // Ctrl+/ → 0x1F (Kitty ctrled_key mapping)
+    input.generate(static_cast<char32_t>('/'), Modifier::Control, KeyboardEventType::Press);
+    REQUIRE(escape(input.peek()) == escape("\x1f"sv));
+}
+
+TEST_CASE("InputGenerator.Legacy.Ctrl_at", "[terminal,input]")
+{
+    auto input = InputGenerator {};
+    // Ctrl+@ → 0x00 (Kitty ctrled_key mapping)
+    input.generate(static_cast<char32_t>('@'), Modifier::Control, KeyboardEventType::Press);
+    REQUIRE(escape(input.peek()) == escape("\x00"sv));
+}
+
+// }}}
