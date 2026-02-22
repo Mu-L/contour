@@ -562,14 +562,24 @@ TEST_CASE("ExtendedKeyboardInputGenerator.ReportAllKeys_alone", "[terminal,input
     REQUIRE(escape(input.take()) == escape("\033[57441u"sv));
 }
 
-TEST_CASE("ExtendedKeyboardInputGenerator.CSIu.Shift_only_with_disambiguate", "[terminal,input]")
+TEST_CASE("ExtendedKeyboardInputGenerator.legacy.Shift_only_with_disambiguate", "[terminal,input]")
 {
     auto input = ExtendedKeyboardInputGenerator {};
     input.enter(KeyboardEventFlag::DisambiguateEscapeCodes);
 
-    // Shift+'a' with disambiguate: CSI 97;2 u (Shift is a real modifier)
+    // Shift+'a' with disambiguate only: legacy 'A' (Shift+printable is unambiguous)
     input.generateChar('A', 'a', Modifier::Shift, KeyboardEventType::Press);
-    REQUIRE(escape(input.take()) == escape("\033[97;2u"sv));
+    REQUIRE(escape(input.take()) == escape("A"sv));
+}
+
+TEST_CASE("ExtendedKeyboardInputGenerator.legacy.colon_with_disambiguate_only", "[terminal,input]")
+{
+    auto input = ExtendedKeyboardInputGenerator {};
+    input.enter(KeyboardEventFlag::DisambiguateEscapeCodes);
+
+    // Shift+';' -> ':' with DisambiguateEscapeCodes only: must send ':' (not CSI u)
+    input.generateChar(':', ';', Modifier::Shift, KeyboardEventType::Press);
+    REQUIRE(escape(input.take()) == escape(":"sv));
 }
 
 TEST_CASE("ExtendedKeyboardInputGenerator.LockModifier_handling", "[terminal,input]")

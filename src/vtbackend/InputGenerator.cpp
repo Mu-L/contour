@@ -332,8 +332,10 @@ bool ExtendedKeyboardInputGenerator::generateChar(char32_t characterEvent,
         return StandardKeyboardInputGenerator::generateChar(
             characterEvent, physicalKey, modifiers, eventType);
 
-    // Has real mods but neither disambiguate nor report-all-keys and no action needed: legacy
-    if (hasRealMods && !needsAction && !disambiguate && !reportAllKeys)
+    // Printable chars with only Shift modifier are unambiguous: stay in legacy mode.
+    // CSI u is only needed when mods other than Shift are present (or reportAllKeys is set).
+    if (!needsAction && !reportAllKeys
+        && (modifiers.without(LockModifiers).without(Modifier::Shift).none() || !disambiguate))
         return StandardKeyboardInputGenerator::generateChar(
             characterEvent, physicalKey, modifiers, eventType);
 
