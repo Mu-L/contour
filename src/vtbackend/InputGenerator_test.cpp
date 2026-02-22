@@ -401,9 +401,9 @@ TEST_CASE("ExtendedKeyboardInputGenerator.Home", "[terminal,input]")
     auto input = ExtendedKeyboardInputGenerator {};
     input.enter(KeyboardEventFlag::DisambiguateEscapeCodes);
 
-    // Home with no modifiers: CSI 1 H
+    // Home with no modifiers: CSI H (code=1 omitted per Kitty spec)
     input.generateKey(Key::Home, Modifier::None, KeyboardEventType::Press);
-    REQUIRE(escape(input.take()) == escape("\033[1H"sv));
+    REQUIRE(escape(input.take()) == escape("\033[H"sv));
 
     // Ctrl+Home: CSI 1;5 H
     input.generateKey(Key::Home, Modifier::Control, KeyboardEventType::Press);
@@ -415,9 +415,9 @@ TEST_CASE("ExtendedKeyboardInputGenerator.End", "[terminal,input]")
     auto input = ExtendedKeyboardInputGenerator {};
     input.enter(KeyboardEventFlag::DisambiguateEscapeCodes);
 
-    // End with no modifiers: CSI 1 F
+    // End with no modifiers: CSI F (code=1 omitted per Kitty spec)
     input.generateKey(Key::End, Modifier::None, KeyboardEventType::Press);
-    REQUIRE(escape(input.take()) == escape("\033[1F"sv));
+    REQUIRE(escape(input.take()) == escape("\033[F"sv));
 
     // Ctrl+End: CSI 1;5 F
     input.generateKey(Key::End, Modifier::Control, KeyboardEventType::Press);
@@ -475,21 +475,21 @@ TEST_CASE("ExtendedKeyboardInputGenerator.CSIu.F1_F4", "[terminal,input]")
     auto input = ExtendedKeyboardInputGenerator {};
     input.enter(KeyboardEventFlag::DisambiguateEscapeCodes);
 
-    // F1 no mods: CSI 1 P
+    // F1 no mods: CSI P (code=1 omitted per Kitty spec)
     input.generateKey(Key::F1, Modifier::None, KeyboardEventType::Press);
-    REQUIRE(escape(input.take()) == escape("\033[1P"sv));
+    REQUIRE(escape(input.take()) == escape("\033[P"sv));
 
-    // F2 no mods: CSI 1 Q
+    // F2 no mods: CSI Q (code=1 omitted per Kitty spec)
     input.generateKey(Key::F2, Modifier::None, KeyboardEventType::Press);
-    REQUIRE(escape(input.take()) == escape("\033[1Q"sv));
+    REQUIRE(escape(input.take()) == escape("\033[Q"sv));
 
     // F3 no mods: CSI 13 ~ (tilde-form to avoid CSI R conflict)
     input.generateKey(Key::F3, Modifier::None, KeyboardEventType::Press);
     REQUIRE(escape(input.take()) == escape("\033[13~"sv));
 
-    // F4 no mods: CSI 1 S
+    // F4 no mods: CSI S (code=1 omitted per Kitty spec)
     input.generateKey(Key::F4, Modifier::None, KeyboardEventType::Press);
-    REQUIRE(escape(input.take()) == escape("\033[1S"sv));
+    REQUIRE(escape(input.take()) == escape("\033[S"sv));
 
     // Shift+F1: CSI 1;2 P
     input.generateKey(Key::F1, Modifier::Shift, KeyboardEventType::Press);

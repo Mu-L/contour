@@ -605,7 +605,10 @@ bool ExtendedKeyboardInputGenerator::generateKey(Key key, Modifiers modifiers, K
 
     auto const [code, function] = mapKey(key);
     auto const encodedModifiers = encodeModifiers(modifiers, eventType);
-    auto controlSequence = std::format("\033[{}", code);
+    // Per Kitty spec: omit key number when code==1 and no modifiers/alternates/text.
+    auto controlSequence = std::string("\033[");
+    if (code != 1 || !encodedModifiers.empty())
+        controlSequence += std::to_string(code);
     if (!encodedModifiers.empty())
         controlSequence += std::format(";{}", encodedModifiers);
     controlSequence += function;
