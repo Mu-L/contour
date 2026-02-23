@@ -3458,6 +3458,336 @@ void Screen<Cell>::processSequence(Sequence const& seq)
         vtParserLog()("Unknown VT sequence: {}", seq);
 }
 
+namespace
+{
+    // DCS response status codes for SBQUERY.
+    constexpr auto SBQueryResponseDisabled = std::string_view("\033P>0b\033\\");
+    constexpr auto SBQueryResponseSuccess = std::string_view("\033P>1b");
+    constexpr auto SBQueryResponseAuthRequired = std::string_view("\033P>2b\033\\");
+    constexpr auto SBQueryResponseAuthFailed = std::string_view("\033P>3b\033\\");
+    constexpr auto DcsTerminator = std::string_view("\033\\");
+
+    /// JSON-encodes a string value, escaping special characters.
+    std::string jsonEscape(std::string_view input)
+    {
+        auto result = std::string {};
+        result.reserve(input.size() + 2);
+        result += '"';
+        for (auto const ch: input)
+        {
+            switch (ch)
+            {
+                case '"': result += "\\\""; break;
+                case '\\': result += "\\\\"; break;
+                case '\b': result += "\\b"; break;
+                case '\f': result += "\\f"; break;
+                case '\n': result += "\\n"; break;
+                case '\r': result += "\\r"; break;
+                case '\t': result += "\\t"; break;
+                default:
+                    if (static_cast<unsigned char>(ch) < 0x20)
+                        result +=
+                            std::format("\\u{:04x}", static_cast<unsigned>(static_cast<unsigned char>(ch)));
+                    else
+                        result += ch;
+                    break;
+            }
+        }
+        result += '"';
+        return result;
+    }
+
+    /// Formats a single CommandBlockInfo as a JSON object.
+    std::string formatBlockJson(CommandBlockInfo const& block,
+                                std::string_view prompt,
+                                std::string_view output,
+                                int outputLineCount)
+    {
+        return std::format(
+            R"({{"command":{},"prompt":{},"output":{},"exitCode":{},"finished":{},"outputLineCount":{}}})",
+            block.commandLine ? jsonEscape(*block.commandLine) : "null",
+            jsonEscape(prompt),
+            jsonEscape(output),
+            block.exitCode,
+            block.finished ? "true" : "false",
+            outputLineCount);
+    }
+
+    /// Prepends a line of text to an accumulator, inserting a newline separator.
+    void prependLine(std::string& accumulator, std::string_view lineText)
+    {
+        if (!accumulator.empty())
+            accumulator = std::string(lineText).append(1, '\n').append(accumulator);
+        else
+            accumulator = lineText;
+    }
+} // namespace
+
+template <CellConcept Cell>
+void Screen<Cell>::handleSemanticBlockQuery(Sequence const& seq)
+{
+    // If mode 2034 is disabled, reply with error DCS.
+    if (!_terminal->isModeEnabled(DECMode::SemanticBlockProtocol))
+    {
+        reply(SBQueryResponseDisabled);
+        return;
+    }
+
+    // Validate authentication token (params 2..5).
+    auto const& tracker = _terminal->semanticBlockTracker();
+    if (seq.parameterCount() < 6)
+    {
+        reply(SBQueryResponseAuthRequired);
+        return;
+    }
+
+    auto const candidateToken = SemanticBlockTracker::Token {
+        static_cast<uint16_t>(seq.param(2)),
+        static_cast<uint16_t>(seq.param(3)),
+        static_cast<uint16_t>(seq.param(4)),
+        static_cast<uint16_t>(seq.param(5)),
+    };
+    if (!tracker.validateToken(candidateToken))
+    {
+        reply(SBQueryResponseAuthFailed);
+        return;
+    }
+
+    auto const queryType = seq.param_or(0, SBQueryType::LastCommand);
+    auto const count = seq.param_or(1, 1); // Pn: count (default 1)
+
+    auto const& completedBlocks = tracker.completedBlocks();
+
+    // Handle in-progress query.
+    if (queryType == SBQueryType::InProgress)
+    {
+        handleInProgressQuery(tracker);
+        return;
+    }
+
+    // Handle last completed command(s).
+    handleCompletedBlocksQuery(tracker, completedBlocks, queryType, count);
+}
+
+template <CellConcept Cell>
+void Screen<Cell>::handleInProgressQuery(SemanticBlockTracker const& tracker)
+{
+    auto const& currentBlock = tracker.currentBlock();
+    if (!currentBlock || currentBlock->finished)
+    {
+        reply(SBQueryResponseDisabled);
+        return;
+    }
+
+    auto const cursorLine = cursor().position.line;
+
+    // Find the most recent OutputStart line by scanning backward from cursor.
+    auto const [foundOutputStart, outputStartLine] = [&]() -> std::pair<bool, LineOffset> {
+        for (auto line = cursorLine; line >= LineOffset(0); --line)
+            if (_grid.lineAt(line).isFlagEnabled(LineFlag::OutputStart))
+                return { true, line };
+        return { false, cursorLine };
+    }();
+
+    // Collect output text from OutputStart to cursor.
+    auto outputText = std::string {};
+    auto outputLineCount = 0;
+    if (foundOutputStart)
+    {
+        for (auto line: std::views::iota(*outputStartLine, *cursorLine + 1))
+        {
+            auto const lineOffset = LineOffset::cast_from(line);
+            if (lineOffset != outputStartLine)
+                outputText += '\n';
+            outputText += _grid.lineAt(lineOffset).toUtf8Trimmed(false, true);
+            ++outputLineCount;
+        }
+    }
+
+    // Collect prompt text by scanning backward from OutputStart to find the Marked line.
+    auto promptText = std::string {};
+    if (foundOutputStart)
+    {
+        for (auto line = outputStartLine - 1; line >= LineOffset(0); --line)
+        {
+            if (_grid.lineAt(line).isFlagEnabled(LineFlag::Marked))
+            {
+                for (auto pl: std::views::iota(*line, *outputStartLine))
+                {
+                    auto const plOffset = LineOffset::cast_from(pl);
+                    if (plOffset != line)
+                        promptText += '\n';
+                    promptText += _grid.lineAt(plOffset).toUtf8Trimmed(false, true);
+                }
+                break;
+            }
+        }
+    }
+
+    auto const json = formatBlockJson(*currentBlock, promptText, outputText, outputLineCount);
+    reply("{}{{\"version\":1,\"blocks\":[{}]}}{}", SBQueryResponseSuccess, json, DcsTerminator);
+}
+
+template <CellConcept Cell>
+void Screen<Cell>::handleCompletedBlocksQuery(SemanticBlockTracker const& tracker,
+                                              std::deque<CommandBlockInfo> const& completedBlocks,
+                                              unsigned queryType,
+                                              int count)
+{
+    auto const requestedCount = (queryType == SBQueryType::LastCommand) ? 1 : std::max(count, 1);
+
+    if (completedBlocks.empty())
+    {
+        // Check if there's a finished current block not yet pushed.
+        if (!tracker.currentBlock() || !tracker.currentBlock()->finished)
+        {
+            reply(SBQueryResponseDisabled);
+            return;
+        }
+    }
+
+    // Collect blocks to return (most recent first, then reverse for JSON output).
+    auto blocks = std::vector<CommandBlockInfo const*> {};
+
+    // Include the current block if finished.
+    if (tracker.currentBlock() && tracker.currentBlock()->finished)
+        blocks.push_back(&*tracker.currentBlock());
+
+    // Add from completed blocks (back = most recent).
+    for (auto it = completedBlocks.rbegin();
+         it != completedBlocks.rend() && static_cast<int>(blocks.size()) < requestedCount;
+         ++it)
+        blocks.push_back(&*it);
+
+    if (blocks.empty())
+    {
+        reply(SBQueryResponseDisabled);
+        return;
+    }
+
+    // Scan grid backward to find text regions for each block.
+    struct BlockTextInfo
+    {
+        std::string prompt;
+        std::string output;
+        int outputLineCount = 0;
+    };
+    auto blockTexts = std::vector<BlockTextInfo>(blocks.size());
+
+    auto const cursorLine = cursor().position.line;
+    auto const historyTop = -boxed_cast<LineOffset>(_grid.historyLineCount());
+
+    enum class ScanState : uint8_t
+    {
+        Searching,
+        InOutput,
+        InPrompt
+    };
+
+    auto state = ScanState::Searching;
+    auto blockIndex = 0;
+    auto currentOutput = std::string {};
+    auto currentPrompt = std::string {};
+    auto currentOutputLineCount = 0;
+
+    /// Finalizes the current block's text and advances to the next block.
+    auto const finalizeBlock = [&]() {
+        blockTexts[blockIndex].output = std::move(currentOutput);
+        blockTexts[blockIndex].outputLineCount = currentOutputLineCount;
+        blockTexts[blockIndex].prompt = std::move(currentPrompt);
+        currentOutput.clear();
+        currentPrompt.clear();
+        currentOutputLineCount = 0;
+        ++blockIndex;
+    };
+
+    /// Handles a grid line in the Searching state.
+    auto const handleSearching = [&](auto const& gridLine, auto flags) {
+        if (flags.contains(LineFlag::CommandEnd))
+        {
+            state = ScanState::InOutput;
+            currentOutput = gridLine.toUtf8Trimmed(false, true);
+            currentOutputLineCount = 1;
+        }
+    };
+
+    /// Handles a grid line in the InOutput state.
+    auto const handleInOutput = [&](auto const& gridLine, auto flags) {
+        auto const lineText = gridLine.toUtf8Trimmed(false, true);
+        if (flags.contains(LineFlag::OutputStart))
+        {
+            prependLine(currentOutput, lineText);
+            ++currentOutputLineCount;
+            state = ScanState::InPrompt;
+        }
+        else if (flags.contains(LineFlag::Marked))
+        {
+            currentPrompt = lineText;
+            finalizeBlock();
+            state = (flags.contains(LineFlag::CommandEnd) && blockIndex < static_cast<int>(blocks.size()))
+                        ? ScanState::InOutput
+                        : ScanState::Searching;
+        }
+        else
+        {
+            prependLine(currentOutput, lineText);
+            ++currentOutputLineCount;
+        }
+    };
+
+    /// Handles a grid line in the InPrompt state.
+    auto const handleInPrompt = [&](auto const& gridLine, auto flags) {
+        auto const lineText = gridLine.toUtf8Trimmed(false, true);
+        if (flags.contains(LineFlag::Marked))
+        {
+            prependLine(currentPrompt, lineText);
+            finalizeBlock();
+            state = (flags.contains(LineFlag::CommandEnd) && blockIndex < static_cast<int>(blocks.size()))
+                        ? ScanState::InOutput
+                        : ScanState::Searching;
+        }
+        else
+        {
+            prependLine(currentPrompt, lineText);
+        }
+    };
+
+    // Scan backward from cursor through main page and history.
+    for (auto line = cursorLine; line >= historyTop && blockIndex < static_cast<int>(blocks.size()); --line)
+    {
+        auto const& gridLine = _grid.lineAt(line);
+        auto const flags = gridLine.flags();
+
+        switch (state)
+        {
+            case ScanState::Searching: handleSearching(gridLine, flags); break;
+            case ScanState::InOutput: handleInOutput(gridLine, flags); break;
+            case ScanState::InPrompt: handleInPrompt(gridLine, flags); break;
+        }
+    }
+
+    // If we were still collecting when we ran out of lines, finalize.
+    if (blockIndex < static_cast<int>(blocks.size())
+        && (state == ScanState::InOutput || state == ScanState::InPrompt))
+    {
+        finalizeBlock();
+    }
+
+    // Build JSON response with blocks in chronological order (oldest first).
+    auto json = std::string {};
+    json += "{\"version\":1,\"blocks\":[";
+    auto const actualCount = std::min(blockIndex, static_cast<int>(blocks.size()));
+    for (auto i = actualCount - 1; i >= 0; --i)
+    {
+        if (i != actualCount - 1)
+            json += ',';
+        json += formatBlockJson(
+            *blocks[i], blockTexts[i].prompt, blockTexts[i].output, blockTexts[i].outputLineCount);
+    }
+    json += "]}";
+    reply("{}{}{}", SBQueryResponseSuccess, json, DcsTerminator);
+}
+
 template <CellConcept Cell>
 void Screen<Cell>::setMark()
 {
@@ -3492,6 +3822,7 @@ void Screen<Cell>::processShellIntegration(Sequence const& seq)
                     clickEvents = true;
             });
             _terminal->shellIntegration().promptStart(clickEvents);
+            _terminal->semanticBlockTracker().promptStart();
             break;
         }
         case 'B': {
@@ -3499,6 +3830,8 @@ void Screen<Cell>::processShellIntegration(Sequence const& seq)
             break;
         }
         case 'C': {
+            if (_terminal->isModeEnabled(DECMode::SemanticBlockProtocol))
+                enableLineFlags(cursor().position.line, LineFlag::OutputStart, true);
             std::optional<std::string> commandLine;
             auto const params = seq.intermediateCharacters().substr(1);
             forEachKeyValue(params, [&](std::string_view key, std::string_view value) {
@@ -3506,13 +3839,17 @@ void Screen<Cell>::processShellIntegration(Sequence const& seq)
                     commandLine = crispy::unescapeURL(value);
             });
             _terminal->shellIntegration().commandOutputStart(commandLine);
+            _terminal->semanticBlockTracker().commandOutputStart(commandLine);
             break;
         }
         case 'D': {
+            if (_terminal->isModeEnabled(DECMode::SemanticBlockProtocol))
+                enableLineFlags(cursor().position.line, LineFlag::CommandEnd, true);
             auto const exitCode = (cmd.size() > 2 && cmd[1] == ';')
                                       ? crispy::to_integer<10, int>(cmd.substr(2)).value_or(0)
                                       : 0;
             _terminal->shellIntegration().commandFinished(exitCode);
+            _terminal->semanticBlockTracker().commandFinished(exitCode);
             break;
         }
         default: break;
@@ -3940,6 +4277,7 @@ ApplyResult Screen<Cell>::apply(Function const& function, Sequence const& seq)
         case SCOSC: saveCursor(); break;
         case SD: scrollDown(seq.param_or<LineCount>(0, LineCount { 1 })); break;
         case UNSCROLL: unscroll(seq.param_or<LineCount>(0, LineCount(1))); break;
+        case SBQUERY: handleSemanticBlockQuery(seq); break;
         case SETMARK:
             // TODO: deprecated. Remove in some future version.
             // Users should migrate to OSC 133.

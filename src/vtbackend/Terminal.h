@@ -12,6 +12,7 @@
 #include <vtbackend/InputHandler.h>
 #include <vtbackend/RenderBuffer.h>
 #include <vtbackend/Selector.h>
+#include <vtbackend/SemanticBlockTracker.h>
 #include <vtbackend/Sequence.h>
 #include <vtbackend/SequenceBuilder.h>
 #include <vtbackend/Settings.h>
@@ -640,6 +641,12 @@ class Terminal
     void setShellIntegration(std::unique_ptr<ShellIntegration> newShellIntegration)
     {
         _shellIntegration = std::move(newShellIntegration);
+    }
+
+    [[nodiscard]] SemanticBlockTracker& semanticBlockTracker() noexcept { return _semanticBlockTracker; }
+    [[nodiscard]] SemanticBlockTracker const& semanticBlockTracker() const noexcept
+    {
+        return _semanticBlockTracker;
     }
 
     [[nodiscard]] ScreenBase& currentScreen() noexcept { return *_currentScreen; }
@@ -1499,6 +1506,7 @@ class Terminal
     HintModeHandler _hintModeHandler { _hintModeExecutor };
 
     std::unique_ptr<ShellIntegration> _shellIntegration;
+    SemanticBlockTracker _semanticBlockTracker;
 
     DesktopNotificationManager _desktopNotificationManager;
 };

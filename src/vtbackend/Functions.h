@@ -175,6 +175,7 @@ constexpr inline auto XTCHECKSUM = FunctionDocumentation { .mnemonic = "XTCHECKS
 constexpr inline auto SL = FunctionDocumentation { .mnemonic = "SL", .comment = "Scroll Left" };
 constexpr inline auto SR = FunctionDocumentation { .mnemonic = "SR", .comment = "Scroll Right" };
 constexpr inline auto MODIFYOTHERKEYS = FunctionDocumentation { .mnemonic = "MODIFYOTHERKEYS", .comment = "Modify Other Keys mode" };
+constexpr inline auto SBQUERY = FunctionDocumentation { .mnemonic = "SBQUERY", .comment = "Query semantic command blocks." };
 
 } // namespace documentation
 
@@ -617,6 +618,7 @@ constexpr inline auto XTCHECKSUM  = detail::CSI(std::nullopt, 1, 1, '#', 'y', VT
 constexpr inline auto XTSMGRAPHICS= detail::CSI('?', 2, 4, std::nullopt, 'S', VTExtension::XTerm, documentation::XTSMGRAPHICS);
 constexpr inline auto XTVERSION   = detail::CSI('>', 0, 1, std::nullopt, 'q', VTExtension::XTerm, documentation::XTVERSION);
 constexpr inline auto MODIFYOTHERKEYS = detail::CSI('>', 0, 1, std::nullopt, 'm', VTExtension::XTerm, documentation::MODIFYOTHERKEYS);
+constexpr inline auto SBQUERY         = detail::CSI('>', 0, 6, std::nullopt, 'b', VTExtension::Contour, documentation::SBQUERY);
 
 // DCS functions
 constexpr inline auto DECRQSS     = detail::DCS(std::nullopt, 0, 0, '$', 'q', VTType::VT420, documentation::DECRQSS);
@@ -789,6 +791,7 @@ constexpr static auto allFunctionsArray() noexcept
         XTSMGRAPHICS,
         XTVERSION,
         MODIFYOTHERKEYS,
+        SBQUERY,
 
         // DCS
         STP,

@@ -10,7 +10,11 @@ circleval
 ctrled
 dcx
 DDDDD
+Decset
+DECRST
+DECSET
 ellips
+emantic
 emtpy
 FFFFF
 GGGGG
@@ -19,8 +23,12 @@ gitgraph
 HHHHH
 HTP
 isakbm
+NCommands
+ndrwxr
+nfile
 pseudoconsole
 rbong
+SBQUERY
 ULval
 unscroll
 URval

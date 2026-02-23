@@ -37,6 +37,7 @@ set(vtbackend_HEADERS
     RenderBuffer.h
     RenderBufferBuilder.h
     Screen.h
+    SemanticBlockTracker.h
     Selector.h
     Sequence.h
     SequenceBuilder.h
@@ -71,6 +72,7 @@ set(vtbackend_SOURCES
     RenderBuffer.cpp
     RenderBufferBuilder.cpp
     Screen.cpp
+    SemanticBlockTracker.cpp
     Selector.cpp
     Sequence.cpp
     SixelParser.cpp
