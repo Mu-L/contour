@@ -7,12 +7,12 @@ BLval
 BRval
 CCCCC
 circleval
+ctrled
 dcx
 DDDDD
 ellips
 emtpy
 FFFFF
-fullwidth
 GGGGG
 gitbranch
 gitgraph
