@@ -454,43 +454,16 @@ bool sendKeyEvent(QKeyEvent* event, vtbackend::KeyboardEventType eventType, Term
             // When NumLock is OFF, Qt reports navigation keys instead (Insert, End, etc.).
             // So the presence of these key codes definitionally implies NumLock is active.
             case Qt::Key_0:
-                mappedKey = Key::Numpad_0;
-                inferredModifiers |= Modifier::NumLock;
-                break;
             case Qt::Key_1:
-                mappedKey = Key::Numpad_1;
-                inferredModifiers |= Modifier::NumLock;
-                break;
             case Qt::Key_2:
-                mappedKey = Key::Numpad_2;
-                inferredModifiers |= Modifier::NumLock;
-                break;
             case Qt::Key_3:
-                mappedKey = Key::Numpad_3;
-                inferredModifiers |= Modifier::NumLock;
-                break;
             case Qt::Key_4:
-                mappedKey = Key::Numpad_4;
-                inferredModifiers |= Modifier::NumLock;
-                break;
             case Qt::Key_5:
-                mappedKey = Key::Numpad_5;
-                inferredModifiers |= Modifier::NumLock;
-                break;
             case Qt::Key_6:
-                mappedKey = Key::Numpad_6;
-                inferredModifiers |= Modifier::NumLock;
-                break;
             case Qt::Key_7:
-                mappedKey = Key::Numpad_7;
-                inferredModifiers |= Modifier::NumLock;
-                break;
             case Qt::Key_8:
-                mappedKey = Key::Numpad_8;
-                inferredModifiers |= Modifier::NumLock;
-                break;
             case Qt::Key_9:
-                mappedKey = Key::Numpad_9;
+                mappedKey = static_cast<Key>(static_cast<int>(Key::Numpad_0) + (key - Qt::Key_0));
                 inferredModifiers |= Modifier::NumLock;
                 break;
             // Operator and Enter keys have the same Qt key code regardless of NumLock state,
