@@ -731,3 +731,99 @@ TEST_CASE("InputGenerator.Legacy.Ctrl_at", "[terminal,input]")
 }
 
 // }}}
+
+// {{{ Numpad + NumLock tests
+
+TEST_CASE("InputGenerator.Numpad_with_NumLock_overrides_DECKPAM", "[terminal,input]")
+{
+    // When NumLock is active, numpad digit keys must produce their literal characters
+    // even in application keypad mode (DECKPAM), not escape sequences.
+    auto input = InputGenerator {};
+    input.setApplicationKeypadMode(true);
+    REQUIRE(input.applicationKeypad());
+
+    auto constexpr NumLock = Modifiers { Modifier::NumLock };
+
+    struct Mapping
+    {
+        Key key;
+        string_view expected;
+    };
+
+    auto constexpr Mappings = std::array {
+        Mapping { .key = Key::Numpad_0, .expected = "0"sv },
+        Mapping { .key = Key::Numpad_1, .expected = "1"sv },
+        Mapping { .key = Key::Numpad_2, .expected = "2"sv },
+        Mapping { .key = Key::Numpad_3, .expected = "3"sv },
+        Mapping { .key = Key::Numpad_4, .expected = "4"sv },
+        Mapping { .key = Key::Numpad_5, .expected = "5"sv },
+        Mapping { .key = Key::Numpad_6, .expected = "6"sv },
+        Mapping { .key = Key::Numpad_7, .expected = "7"sv },
+        Mapping { .key = Key::Numpad_8, .expected = "8"sv },
+        Mapping { .key = Key::Numpad_9, .expected = "9"sv },
+        Mapping { .key = Key::Numpad_Decimal, .expected = "."sv },
+        Mapping { .key = Key::Numpad_Divide, .expected = "/"sv },
+        Mapping { .key = Key::Numpad_Multiply, .expected = "*"sv },
+        Mapping { .key = Key::Numpad_Add, .expected = "+"sv },
+        Mapping { .key = Key::Numpad_Subtract, .expected = "-"sv },
+        Mapping { .key = Key::Numpad_Enter, .expected = "\r"sv },
+        Mapping { .key = Key::Numpad_Equal, .expected = "="sv },
+    };
+
+    for (auto const& mapping: Mappings)
+    {
+        INFO(std::format("Testing {}+NumLock in DECKPAM => {}", mapping.key, escape(mapping.expected)));
+        input.generate(mapping.key, NumLock, KeyboardEventType::Press);
+        CHECK(escape(input.peek()) == escape(mapping.expected));
+        input.consume(static_cast<int>(input.peek().size()));
+    }
+}
+
+TEST_CASE("InputGenerator.Numpad_without_NumLock_in_DECKPAM", "[terminal,input]")
+{
+    // Without NumLock, numpad keys in DECKPAM must send their application keypad sequences.
+    auto input = InputGenerator {};
+    input.setApplicationKeypadMode(true);
+    REQUIRE(input.applicationKeypad());
+
+    // KP_5 without NumLock in DECKPAM → CSI E
+    input.generate(Key::Numpad_5, Modifiers {}, KeyboardEventType::Press);
+    CHECK(escape(input.peek()) == escape("\033[E"sv));
+}
+
+TEST_CASE("ExtendedKeyboardInputGenerator.CSIu.Numpad5_with_NumLock", "[terminal,input]")
+{
+    // KP_5 + NumLock in Kitty disambiguate mode:
+    // code=57404, modifier=1+128=129, final='u'
+    auto input = ExtendedKeyboardInputGenerator {};
+    input.enter(KeyboardEventFlag::DisambiguateEscapeCodes);
+
+    input.generateKey(Key::Numpad_5, Modifier::NumLock, KeyboardEventType::Press);
+    REQUIRE(escape(input.take()) == escape("\033[57404;129u"sv));
+}
+
+TEST_CASE("ExtendedKeyboardInputGenerator.CSIu.Numpad5_AssociatedText", "[terminal,input]")
+{
+    // KP_5 + NumLock with ReportAssociatedText enabled:
+    // code=57404, modifier=129, associated_text=53 ('5'), final='u'
+    auto input = ExtendedKeyboardInputGenerator {};
+    input.enter(KeyboardEventFlag::DisambiguateEscapeCodes);
+    input.flags().enable(KeyboardEventFlag::ReportAssociatedText);
+
+    input.generateKey(Key::Numpad_5, Modifier::NumLock, KeyboardEventType::Press);
+    REQUIRE(escape(input.take()) == escape("\033[57404;129;53u"sv));
+}
+
+TEST_CASE("ExtendedKeyboardInputGenerator.CSIu.Numpad_AssociatedText_no_mods", "[terminal,input]")
+{
+    // KP_5 without modifiers but with ReportAssociatedText:
+    // code=57404, modifier=1 (default, needed for text parameter), associated_text=53, final='u'
+    auto input = ExtendedKeyboardInputGenerator {};
+    input.enter(KeyboardEventFlag::DisambiguateEscapeCodes);
+    input.flags().enable(KeyboardEventFlag::ReportAssociatedText);
+
+    input.generateKey(Key::Numpad_5, Modifiers {}, KeyboardEventType::Press);
+    REQUIRE(escape(input.take()) == escape("\033[57404;1;53u"sv));
+}
+
+// }}}

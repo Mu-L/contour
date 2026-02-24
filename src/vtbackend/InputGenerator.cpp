@@ -551,6 +551,33 @@ constexpr pair<unsigned, char> mapKey(Key key) noexcept
     crispy::unreachable();
 }
 
+/// Returns the associated text codepoint for a numpad key, or 0 if none.
+/// Per the Kitty keyboard protocol, associated text is the character the key would produce.
+constexpr char32_t numpadAssociatedText(Key key) noexcept
+{
+    switch (key)
+    {
+        case Key::Numpad_0: return U'0';
+        case Key::Numpad_1: return U'1';
+        case Key::Numpad_2: return U'2';
+        case Key::Numpad_3: return U'3';
+        case Key::Numpad_4: return U'4';
+        case Key::Numpad_5: return U'5';
+        case Key::Numpad_6: return U'6';
+        case Key::Numpad_7: return U'7';
+        case Key::Numpad_8: return U'8';
+        case Key::Numpad_9: return U'9';
+        case Key::Numpad_Decimal: return U'.';
+        case Key::Numpad_Divide: return U'/';
+        case Key::Numpad_Multiply: return U'*';
+        case Key::Numpad_Subtract: return U'-';
+        case Key::Numpad_Add: return U'+';
+        case Key::Numpad_Enter: return U'\r';
+        case Key::Numpad_Equal: return U'=';
+        default: return 0;
+    }
+}
+
 bool ExtendedKeyboardInputGenerator::generateKey(Key key, Modifiers modifiers, KeyboardEventType eventType)
 {
     if (!enabled(eventType))
@@ -577,12 +604,23 @@ bool ExtendedKeyboardInputGenerator::generateKey(Key key, Modifiers modifiers, K
 
     auto const [code, function] = mapKey(key);
     auto const encodedModifiers = encodeModifiers(modifiers, eventType);
+
+    // Check if we should append associated text (third CSI u parameter)
+    auto const associatedText =
+        enabled(KeyboardEventFlag::ReportAssociatedText) ? numpadAssociatedText(key) : char32_t { 0 };
+
     // Per Kitty spec: omit key number when code==1 and no modifiers/alternates/text.
     auto controlSequence = std::string("\033[");
-    if (code != 1 || !encodedModifiers.empty())
+    if (code != 1 || !encodedModifiers.empty() || associatedText)
         controlSequence += std::to_string(code);
-    if (!encodedModifiers.empty())
-        controlSequence += std::format(";{}", encodedModifiers);
+    if (!encodedModifiers.empty() || associatedText)
+    {
+        // When associated text is present, the modifier field must be emitted
+        // (use "1" as default when no modifiers, per Kitty spec encoding: 1 + 0 = 1)
+        controlSequence += std::format(";{}", encodedModifiers.empty() ? "1" : encodedModifiers);
+    }
+    if (associatedText)
+        controlSequence += std::format(";{}", static_cast<unsigned>(associatedText));
     controlSequence += function;
     append(controlSequence);
 

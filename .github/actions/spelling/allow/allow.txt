@@ -35,6 +35,7 @@ copy'n'paste
 copyable
 crossfade
 dbus
+definitionally
 flamegraphs
 gha
 ilammy
