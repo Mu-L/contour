@@ -128,6 +128,7 @@
           <li>Fixes Home/End key encoding in Kitty keyboard protocol (extended keyboard input generator)</li>
           <li>Fixes Kitty keyboard protocol: F1-F4 CSI u key codes, legacy F1-F4 modifier encoding, CSI u gating for ReportEventTypes and ReportAllKeys flags, lock modifier handling, and Press event type suppression</li>
           <li>Fixes Kitty keyboard protocol: proper CapsLock/NumLock modifier reporting, correct modifier encoding per spec, and Unicode case folding for non-ASCII characters</li>
+          <li>Fixes numpad keys not producing digits when NumLock is ON, especially on Wayland where native modifier detection is unreliable (#1901)</li>
           <li>Fixes tab characters (HT) intermittently lost in terminal output due to bulk text parser skipping trailing C0 controls and tab cursor movement not filling intermediate cells with spaces (#1876)</li>
           <li>Replaces abrupt cell blink toggle with configurable smooth pulse animation via blink_style profile setting (classic/smooth/linger)</li>
           <li>Adds configurable crossfade transition between primary and alternate screens via screen_transition and screen_transition_duration profile settings</li>
