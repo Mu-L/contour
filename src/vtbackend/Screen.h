@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <deque>
 #include <format>
 #include <functional>
 #include <memory>
@@ -36,8 +37,10 @@
 namespace vtbackend
 {
 
+class SemanticBlockTracker;
 class SixelImageBuilder;
 class Terminal;
+struct CommandBlockInfo;
 struct Settings;
 
 // {{{ TODO: move me somewhere more appropriate
@@ -659,6 +662,12 @@ class Screen final: public ScreenBase, public capabilities::StaticDatabase
     [[nodiscard]] std::unique_ptr<ParserExtension> hookXTGETTCAP(Sequence const& seq);
 
     void processShellIntegration(Sequence const& seq);
+    void handleSemanticBlockQuery(Sequence const& seq);
+    void handleInProgressQuery(SemanticBlockTracker const& tracker);
+    void handleCompletedBlocksQuery(SemanticBlockTracker const& tracker,
+                                    std::deque<CommandBlockInfo> const& completedBlocks,
+                                    unsigned queryType,
+                                    int count);
 
     gsl::not_null<Terminal*> _terminal;
     gsl::not_null<Settings*> _settings;

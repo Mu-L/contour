@@ -32,9 +32,11 @@ enum class LineFlag : uint8_t
     Wrappable = 0x0001,
     Wrapped = 0x0002,
     Marked = 0x0004,
+    OutputStart = 0x0008, ///< Command output begins (from OSC 133;C)
     DoubleWidth = 0x0010,
     DoubleHeightTop = 0x0020,
     DoubleHeightBottom = 0x0040,
+    CommandEnd = 0x0080, ///< Command finished (from OSC 133;D)
 };
 
 using LineFlags = crispy::flags<LineFlag>;

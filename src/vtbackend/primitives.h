@@ -732,6 +732,13 @@ enum class DECMode : std::uint16_t
     // if modified by the user or operating system (e.g. dark/light mode adaption).
     ReportColorPaletteUpdated = 2031,
 
+    /// DEC Private Mode 2034 — Semantic Block Reader Protocol.
+    ///
+    /// When enabled, the terminal tracks semantic zones from OSC 133 shell integration
+    /// and the query sequence CSI > Ps ; Pn b becomes available for retrieving structured
+    /// JSON blocks of semantic command data.
+    SemanticBlockProtocol = 2034,
+
     // If enabled (default, as per spec), then the cursor is left next to the graphic,
     // that is, the text cursor is placed at the position of the sixel cursor.
     // If disabled otherwise, the cursor is placed below the image, as if CR LF was sent,
@@ -844,6 +851,7 @@ constexpr unsigned toDECModeNum(DECMode m) noexcept
         case DECMode::MousePassiveTracking: return 2029;
         case DECMode::ReportGridCellSelection: return 2030;
         case DECMode::ReportColorPaletteUpdated: return 2031;
+        case DECMode::SemanticBlockProtocol: return 2034;
         case DECMode::BatchedRendering: return 2026;
         case DECMode::Unicode: return 2027;
         case DECMode::TextReflow: return 2028;
@@ -903,6 +911,7 @@ constexpr std::optional<DECMode> fromDECModeNum(unsigned int modeNum) noexcept
         case 2029: return DECMode::MousePassiveTracking;
         case 2030: return DECMode::ReportGridCellSelection;
         case 2031: return DECMode::ReportColorPaletteUpdated;
+        case 2034: return DECMode::SemanticBlockProtocol;
         case 8452: return DECMode::SixelCursorNextToGraphic;
         default: return std::nullopt;
     }

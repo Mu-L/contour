@@ -1,15 +1,79 @@
 // SPDX-License-Identifier: Apache-2.0
+#include <vtbackend/Functions.h>
 #include <vtbackend/MockTerm.h>
+#include <vtbackend/SemanticBlockTracker.h>
 #include <vtbackend/ShellIntegration.h>
 #include <vtbackend/Terminal.h>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <string>
+#include <string_view>
 
 using namespace vtbackend;
 using namespace std::string_view_literals;
 
 namespace
 {
+
+/// Extracts the 4-integer token from a DECSET 2034 DCS reply.
+///
+/// The reply format is: ESC P > 2034 ; 1 b T1 ; T2 ; T3 ; T4 ESC backslash
+/// @param replyData The raw reply data from the terminal.
+/// @return The token as a Token array, or std::nullopt if not found.
+std::optional<SemanticBlockTracker::Token> extractTokenFromDecsetReply(std::string const& replyData)
+{
+    // Look for "\033P>2034;1b" prefix
+    auto const prefix = std::string_view("\033P>2034;1b");
+    auto const pos = replyData.find(prefix);
+    if (pos == std::string::npos)
+        return std::nullopt;
+
+    // Find the ST terminator
+    auto const dataStart = pos + prefix.size();
+    auto const stPos = replyData.find("\033\\", dataStart);
+    if (stPos == std::string::npos)
+        return std::nullopt;
+
+    // Parse 4 semicolon-separated integers: "T1;T2;T3;T4"
+    auto const tokenStr = replyData.substr(dataStart, stPos - dataStart);
+    auto token = SemanticBlockTracker::Token {};
+    auto start = size_t { 0 };
+    for (auto i = 0; i < 4; ++i)
+    {
+        auto const sep = (i < 3) ? tokenStr.find(';', start) : tokenStr.size();
+        if (sep == std::string::npos)
+            return std::nullopt;
+        token[i] = static_cast<uint16_t>(std::stoul(tokenStr.substr(start, sep - start)));
+        start = sep + 1;
+    }
+    return token;
+}
+
+/// Enables mode 2034 and returns the session token from the DCS reply.
+///
+/// @param mc The MockTerm to operate on.
+/// @return The extracted token.
+SemanticBlockTracker::Token enableModeAndGetToken(MockTerm<>& mc)
+{
+    mc.resetReplyData();
+    mc.writeToScreen(DECSM(2034));
+    mc.terminal.flushInput();
+    auto const token = extractTokenFromDecsetReply(mc.replyData());
+    REQUIRE(token.has_value());
+    return *token;
+}
+
+/// Builds an authenticated SBQUERY escape sequence with token parameters.
+///
+/// @param queryType The SBQUERY query type (Ps).
+/// @param count The count parameter (Pn).
+/// @param token The session token to embed as parameters 2..5.
+/// @return The complete CSI escape sequence string.
+std::string authenticatedSBQuery(unsigned queryType, unsigned count, SemanticBlockTracker::Token const& token)
+{
+    return SBQUERY(queryType, count, token[0], token[1], token[2], token[3]);
+}
 
 class MockShellIntegration: public ShellIntegration
 {
@@ -42,6 +106,32 @@ class MockShellIntegration: public ShellIntegration
         lastCommandFinishedExitCode = exitCode;
     }
 };
+
+/// Simulates a complete command cycle: prompt -> command -> output -> finish.
+/// Inserts newlines to mirror real shell behavior (Enter after prompt, newline after output).
+void simulateCommand(MockTerm<>& mc,
+                     std::string_view promptText,
+                     std::string_view commandLine,
+                     std::string_view outputText,
+                     int exitCode)
+{
+    // OSC 133;A - Prompt Start
+    mc.writeToScreen("\033]133;A\033\\");
+    // Write prompt text
+    mc.writeToScreen(promptText);
+    // OSC 133;B - Prompt End
+    mc.writeToScreen("\033]133;B\033\\");
+    // Newline simulates the Enter keypress after the command
+    mc.writeToScreen("\n");
+    // OSC 133;C - Command Output Start (with cmdline_url)
+    mc.writeToScreen(std::string("\033]133;C;cmdline_url=") + std::string(commandLine) + "\033\\");
+    // Write command output
+    mc.writeToScreen(outputText);
+    // Trailing newline (most commands end their output with one)
+    mc.writeToScreen("\n");
+    // OSC 133;D - Command Finished
+    mc.writeToScreen(std::string("\033]133;D;") + std::to_string(exitCode) + "\033\\");
+}
 
 } // namespace
 
@@ -114,4 +204,343 @@ TEST_CASE("ShellIntegration.SETMARK")
         mc.writeToScreen("\033[>M");
         CHECK(mc.terminal.currentScreen().lineFlagsAt(LineOffset(0)).contains(LineFlag::Marked));
     }
+}
+
+// ==================== Semantic Block Protocol Tests ====================
+
+TEST_CASE("SemanticBlockProtocol.LineFlags")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    SECTION("OutputStart and CommandEnd flags set when mode 2034 is on")
+    {
+        // Enable mode 2034
+        mc.writeToScreen(DECSM(2034));
+
+        // OSC 133;C should set OutputStart on the current line
+        mc.writeToScreen("\033]133;C\033\\");
+        CHECK(mc.terminal.currentScreen().lineFlagsAt(LineOffset(0)).contains(LineFlag::OutputStart));
+
+        // Write some output and move to a new line
+        mc.writeToScreen("output\n");
+
+        // OSC 133;D should set CommandEnd on the current line
+        mc.writeToScreen("\033]133;D\033\\");
+        CHECK(mc.terminal.currentScreen().lineFlagsAt(LineOffset(1)).contains(LineFlag::CommandEnd));
+    }
+
+    SECTION("Flags NOT set when mode 2034 is off")
+    {
+        // Mode 2034 is off by default
+
+        // OSC 133;C should NOT set OutputStart
+        mc.writeToScreen("\033]133;C\033\\");
+        CHECK_FALSE(mc.terminal.currentScreen().lineFlagsAt(LineOffset(0)).contains(LineFlag::OutputStart));
+
+        mc.writeToScreen("output\n");
+
+        // OSC 133;D should NOT set CommandEnd
+        mc.writeToScreen("\033]133;D\033\\");
+        CHECK_FALSE(mc.terminal.currentScreen().lineFlagsAt(LineOffset(1)).contains(LineFlag::CommandEnd));
+    }
+}
+
+TEST_CASE("SemanticBlockProtocol.TrackerMetadata")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    SECTION("Tracker stores command line and exit code")
+    {
+        mc.writeToScreen(DECSM(2034));
+
+        mc.writeToScreen("\033]133;A\033\\");
+        mc.writeToScreen("$ ");
+        mc.writeToScreen("\033]133;C;cmdline_url=ls%20-la\033\\");
+        mc.writeToScreen("file1\n");
+        mc.writeToScreen("\033]133;D;0\033\\");
+
+        auto const& tracker = mc.terminal.semanticBlockTracker();
+        REQUIRE(tracker.currentBlock().has_value());
+        CHECK(tracker.currentBlock()->finished == true);
+        REQUIRE(tracker.currentBlock()->commandLine.has_value());
+        CHECK(tracker.currentBlock()->commandLine.value() == "ls -la");
+        CHECK(tracker.currentBlock()->exitCode == 0);
+    }
+
+    SECTION("Tracker disabled clears data")
+    {
+        mc.writeToScreen(DECSM(2034));
+        mc.writeToScreen("\033]133;A\033\\");
+        mc.writeToScreen("\033]133;C;cmdline_url=test\033\\");
+        mc.writeToScreen("\033]133;D;0\033\\");
+
+        auto const& tracker = mc.terminal.semanticBlockTracker();
+        CHECK(tracker.currentBlock().has_value());
+
+        // Disable mode
+        mc.writeToScreen(DECRM(2034));
+        CHECK_FALSE(tracker.currentBlock().has_value());
+        CHECK(tracker.completedBlocks().empty());
+    }
+}
+
+TEST_CASE("SemanticBlockProtocol.DECRQM")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    SECTION("DECRQM reports mode 2034 as reset by default")
+    {
+        mc.resetReplyData();
+        mc.writeToScreen(DECRQM(2034));
+        mc.terminal.flushInput();
+        // Response should be CSI ? 2034 ; 2 $ y  (2 = reset)
+        CHECK(mc.replyData().find("2034;2$y") != std::string::npos);
+    }
+
+    SECTION("DECRQM reports mode 2034 as set after enabling")
+    {
+        mc.writeToScreen(DECSM(2034));
+        mc.terminal.flushInput();
+        mc.resetReplyData();
+        mc.writeToScreen(DECRQM(2034));
+        mc.terminal.flushInput();
+        // Response should be CSI ? 2034 ; 1 $ y  (1 = set)
+        CHECK(mc.replyData().find("2034;1$y") != std::string::npos);
+    }
+}
+
+TEST_CASE("SemanticBlockProtocol.QueryDisabled")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    SECTION("Query without enabling mode returns error DCS")
+    {
+        mc.resetReplyData();
+        // Query last command
+        mc.writeToScreen(SBQUERY(SBQueryType::LastCommand));
+        mc.terminal.flushInput();
+        // Should get error DCS: ESC P > 0 b ESC backslash
+        CHECK(mc.replyData().find("\033P>0b\033\\") != std::string::npos);
+    }
+}
+
+TEST_CASE("SemanticBlockProtocol.QueryLastCommand")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    // Enable mode 2034 and capture the session token
+    auto const token = enableModeAndGetToken(mc);
+
+    // Simulate a complete command
+    simulateCommand(mc, "$ ", "ls", "file1\nfile2", 0);
+
+    // Start a new prompt so the previous command is finalized
+    mc.writeToScreen("\033]133;A\033\\");
+
+    mc.terminal.flushInput();
+    mc.resetReplyData();
+    // Query last command with token
+    mc.writeToScreen(authenticatedSBQuery(SBQueryType::LastCommand, 1, token));
+    mc.terminal.flushInput();
+
+    auto const& reply = mc.replyData();
+
+    // Should get success DCS
+    REQUIRE(reply.find("\033P>1b") != std::string::npos);
+    // Should contain JSON with version
+    CHECK(reply.find("\"version\":1") != std::string::npos);
+    // Should contain the command
+    CHECK(reply.find("\"command\":\"ls\"") != std::string::npos);
+    // Should contain exit code
+    CHECK(reply.find("\"exitCode\":0") != std::string::npos);
+    // Should be marked as finished
+    CHECK(reply.find("\"finished\":true") != std::string::npos);
+}
+
+TEST_CASE("SemanticBlockProtocol.QueryLastNCommands")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    // Enable mode 2034 and capture the session token
+    auto const token = enableModeAndGetToken(mc);
+
+    // Simulate two commands
+    simulateCommand(mc, "$ ", "cmd1", "out1", 0);
+    simulateCommand(mc, "$ ", "cmd2", "out2", 1);
+
+    // Start new prompt to finalize
+    mc.writeToScreen("\033]133;A\033\\");
+
+    mc.resetReplyData();
+    // Query last 2 commands with token
+    mc.writeToScreen(authenticatedSBQuery(SBQueryType::LastNumberOfCommands, 2, token));
+    mc.terminal.flushInput();
+
+    auto const& reply = mc.replyData();
+    REQUIRE(reply.find("\033P>1b") != std::string::npos);
+    // Both commands should be present
+    CHECK(reply.find("\"command\":\"cmd1\"") != std::string::npos);
+    CHECK(reply.find("\"command\":\"cmd2\"") != std::string::npos);
+}
+
+TEST_CASE("SemanticBlockProtocol.QueryInProgress")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    // Enable mode 2034 and capture the session token
+    auto const token = enableModeAndGetToken(mc);
+
+    // Start a command but don't finish it (no OSC 133;D)
+    mc.writeToScreen("\033]133;A\033\\");
+    mc.writeToScreen("$ ");
+    mc.writeToScreen("\033]133;B\033\\");
+    mc.writeToScreen("\033]133;C;cmdline_url=running\033\\");
+    mc.writeToScreen("partial output");
+
+    mc.resetReplyData();
+    // Query in-progress command with token
+    mc.writeToScreen(authenticatedSBQuery(SBQueryType::InProgress, 1, token));
+    mc.terminal.flushInput();
+
+    auto const& reply = mc.replyData();
+    REQUIRE(reply.find("\033P>1b") != std::string::npos);
+    // Should be marked as not finished
+    CHECK(reply.find("\"finished\":false") != std::string::npos);
+    // Should contain the command
+    CHECK(reply.find("\"command\":\"running\"") != std::string::npos);
+}
+
+TEST_CASE("SemanticBlockProtocol.NoCompletedCommands")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    // Enable mode 2034 and capture the session token
+    auto const token = enableModeAndGetToken(mc);
+
+    mc.resetReplyData();
+    // Query last command when none exists, with valid token
+    mc.writeToScreen(authenticatedSBQuery(SBQueryType::LastCommand, 1, token));
+    mc.terminal.flushInput();
+
+    auto const& reply = mc.replyData();
+    // Should get error DCS (no data)
+    CHECK(reply.find("\033P>0b\033\\") != std::string::npos);
+}
+
+// ==================== Token Authentication Tests ====================
+
+TEST_CASE("SemanticBlockProtocol.TokenOnEnable")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    mc.resetReplyData();
+    mc.writeToScreen(DECSM(2034));
+    mc.terminal.flushInput();
+
+    auto const& reply = mc.replyData();
+
+    // Should receive DCS reply with token
+    REQUIRE(reply.find("\033P>2034;1b") != std::string::npos);
+
+    // Extract and validate the token
+    auto const token = extractTokenFromDecsetReply(reply);
+    REQUIRE(token.has_value());
+
+    // Token should match what the tracker has
+    auto const& tracker = mc.terminal.semanticBlockTracker();
+    REQUIRE(tracker.token().has_value());
+    CHECK(tracker.token().value() == token.value());
+}
+
+TEST_CASE("SemanticBlockProtocol.TokenInvalidatedOnDisable")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    // Enable and capture token
+    auto const token = enableModeAndGetToken(mc);
+
+    // Disable mode
+    mc.writeToScreen(DECRM(2034));
+
+    // Token should be cleared
+    auto const& tracker = mc.terminal.semanticBlockTracker();
+    CHECK_FALSE(tracker.token().has_value());
+
+    // Validating the old token should fail
+    CHECK_FALSE(tracker.validateToken(token));
+}
+
+TEST_CASE("SemanticBlockProtocol.QueryWithoutToken")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    // Enable mode 2034
+    mc.writeToScreen(DECSM(2034));
+    mc.terminal.flushInput();
+
+    // Simulate a complete command
+    simulateCommand(mc, "$ ", "ls", "file1", 0);
+    mc.writeToScreen("\033]133;A\033\\");
+
+    mc.resetReplyData();
+    // Query WITHOUT token (only 2 params, not 6)
+    mc.writeToScreen(SBQUERY(SBQueryType::LastCommand, 1));
+    mc.terminal.flushInput();
+
+    auto const& reply = mc.replyData();
+    // Should get status 2: authentication required
+    CHECK(reply.find("\033P>2b\033\\") != std::string::npos);
+}
+
+TEST_CASE("SemanticBlockProtocol.QueryWithWrongToken")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    // Enable mode 2034 and capture token
+    enableModeAndGetToken(mc);
+
+    // Simulate a complete command
+    simulateCommand(mc, "$ ", "ls", "file1", 0);
+    mc.writeToScreen("\033]133;A\033\\");
+
+    mc.resetReplyData();
+    // Query with a fabricated wrong token
+    auto const wrongToken = SemanticBlockTracker::Token { 0xDEAD, 0xBEEF, 0xCAFE, 0xBABE };
+    mc.writeToScreen(authenticatedSBQuery(SBQueryType::LastCommand, 1, wrongToken));
+    mc.terminal.flushInput();
+
+    auto const& reply = mc.replyData();
+    // Should get status 3: authentication failed
+    CHECK(reply.find("\033P>3b\033\\") != std::string::npos);
+}
+
+TEST_CASE("SemanticBlockProtocol.TokenChangesOnReEnable")
+{
+    auto mc = MockTerm { PageSize { LineCount(25), ColumnCount(80) } };
+
+    // Enable, get first token
+    auto const token1 = enableModeAndGetToken(mc);
+
+    // Disable, then re-enable
+    mc.writeToScreen(DECRM(2034));
+    auto const token2 = enableModeAndGetToken(mc);
+
+    // Tokens should be different (with overwhelming probability)
+    CHECK(token1 != token2);
+
+    // Simulate a command
+    simulateCommand(mc, "$ ", "ls", "output", 0);
+    mc.writeToScreen("\033]133;A\033\\");
+
+    // Old token should be rejected
+    mc.resetReplyData();
+    mc.writeToScreen(authenticatedSBQuery(SBQueryType::LastCommand, 1, token1));
+    mc.terminal.flushInput();
+    CHECK(mc.replyData().find("\033P>3b\033\\") != std::string::npos);
+
+    // New token should work
+    mc.resetReplyData();
+    mc.writeToScreen(authenticatedSBQuery(SBQueryType::LastCommand, 1, token2));
+    mc.terminal.flushInput();
+    CHECK(mc.replyData().find("\033P>1b") != std::string::npos);
 }
